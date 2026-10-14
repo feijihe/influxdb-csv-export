@@ -214,23 +214,25 @@ document.documentElement.getAttribute('data-influx-csv-ext')      // "1"    → 
 
 ### 2. `content.js` — 按钮外观与位置对齐原生
 
-```diff
-+    const autoRefreshBtn = document.querySelector('.autorefresh-dropdown');
-     var btn = document.createElement('button');
-     btn.id = BUTTON_ID;
-     btn.type = 'button';
--    btn.textContent = 'CSV';
-+    btn.innerHTML = '<span><span data-testid="icon" class="cf-icon Download_New cf-button-icon"></span><span class="cf-button--label">CSV</span></span>';
--    btn.title = 'Download query results as a .CSV file (added by extension)';
-+    btn.title = DEFAULT_TITLE;
-     btn.setAttribute('data-testid', 'csv-download-button-ext');
--    btn.className = 'cf-button cf-button-md cf-button-default';
-+    btn.className = 'cf-button cf-button-sm cf-button-default';
-     btn.style.cssText = 'margin-left:8px;cursor:pointer;';
-     btn.addEventListener('click', function () { exportCsv(btn); });
--    bar.appendChild(btn);
-+    bar.insertBefore(btn, autoRefreshBtn);
+当前代码（已转为 ES6）：
+
+```js
+const autoRefreshBtn = document.querySelector('.autorefresh-dropdown');
+const btn = document.createElement('button');
+btn.id = BUTTON_ID;
+btn.type = 'button';
+btn.innerHTML =
+  '<span><span data-testid="icon" class="cf-icon Download_New cf-button-icon"></span>' +
+  `<span class="cf-button--label">${LABEL}</span></span>`;
+btn.title = DEFAULT_TITLE;
+btn.setAttribute('data-testid', 'csv-download-button-ext');
+btn.className = 'cf-button cf-button-sm cf-button-default';
+btn.style.cssText = 'margin-left:8px;cursor:pointer;';
+btn.addEventListener('click', () => exportCsv(btn));
+bar.insertBefore(btn, autoRefreshBtn);
 ```
+
+相对通用版本的改动：
 
 - 用 `cf-icon Download_New` + `cf-button--label` 复刻原生按钮的「图标 + 文字」结构，尺寸由 `md` 改为 `sm`
 - 插入点由工具栏末尾（`appendChild`）改为 `.autorefresh-dropdown` **之前**，即落在 `View Raw Data` 右侧、刷新控件左侧 —— 与原生 CSV 按钮同位置
@@ -258,52 +260,27 @@ barOrder : [div, influx-csv-export-ext, div, div, switch-to-script-editor, time-
 
 而且恢复用的 `var old = btn.textContent` 记下的也只是 `"CSV"`，所以退化成纯文字后再也回不来。
 
-修法是让状态更新只动 label 节点：
+修法是让状态更新只动 label 节点，并抽出一个统一的复位函数：
 
-```diff
-+  // Only ever rewrite the label node. Assigning to btn.textContent would wipe
-+  // out the icon markup that ensureButton() builds.
-+  function setLabel(btn, text) {
-+    var label = btn.querySelector('.cf-button--label');
-+    if (label) label.textContent = text;
-+    else btn.textContent = text;
-+  }
-+
-   function exportCsv(btn) {
-     if (!lastQuery) {
--      btn.textContent = 'CSV: run a query first';
--      setTimeout(function () { btn.textContent = 'CSV'; }, 2500);
-+      setLabel(btn, 'CSV: run a query first');
-+      setTimeout(function () { setLabel(btn, 'CSV'); }, 2500);
-       return;
-     }
-@@
-     btn.disabled = true;
--    var old = btn.textContent;
--    btn.textContent = 'CSV \u2026';
-+    setLabel(btn, 'CSV \u2026');
-@@
--      btn.textContent = 'CSV \u2713';
--      setTimeout(function () { btn.textContent = old; btn.disabled = false; }, 2000);
-+      setLabel(btn, 'CSV \u2713');
-+      setTimeout(function () {
-+        setLabel(btn, 'CSV');
-+        btn.disabled = false;
-+      }, 2000);
-     }).catch(function (err) {
--      btn.textContent = 'CSV failed';
-+      setLabel(btn, 'CSV failed');
-       btn.title = String(err);
--      setTimeout(function () { btn.textContent = old; btn.disabled = false; }, 3000);
-+      setTimeout(function () {
-+        setLabel(btn, 'CSV');
-+        btn.title = DEFAULT_TITLE;
-+        btn.disabled = false;
-+      }, 3000);
-     });
+```js
+// Only ever rewrite the label node. Assigning to btn.textContent would wipe
+// out the icon markup that ensureButton() builds.
+const setLabel = (btn, text) => {
+  const label = btn.querySelector('.cf-button--label');
+  if (label) label.textContent = text;
+  else btn.textContent = text;
+};
+
+const resetButton = (btn, delay) => {
+  setTimeout(() => {
+    setLabel(btn, LABEL);
+    btn.title = DEFAULT_TITLE;
+    btn.disabled = false;
+  }, delay);
+};
 ```
 
-顺带把失败时被改写的 `btn.title` 也还原回 `DEFAULT_TITLE`，否则错误信息会一直挂在按钮上。
+`exportCsv()` 里所有 `btn.textContent = …` 都改成 `setLabel(…)`，成功与失败分别调用 `resetButton(btn, 2000)` / `resetButton(btn, 3000)`。顺带把失败时被改写的 `btn.title` 也还原回 `DEFAULT_TITLE`，否则错误信息会一直挂在按钮上。
 
 修复后在 `http://169.254.197.198:8086` 上实测（点击前 → 点击后 → 状态定时器走完）：
 
@@ -313,6 +290,30 @@ labelText   : "CSV" → "CSV" → "CSV"      （中间短暂显示 "CSV …" / "
 extHtml     : 点击前后完全一致，图标标记没丢
 导出结果     : Downloads\query.csv，73,174 字节 / 722 行
 ```
+
+### 4. `content.js` / `inject.js` — 全文件改为 ES6 语法
+
+两个文件都已从 ES5 风格改写为 ES6（ES2015），行为不变：
+
+| 原写法 | 现写法 |
+| --- | --- |
+| `(function () { … })()` | `(() => { … })()` |
+| `var x = …` | `const x = …`（`lastQuery` 需要重新赋值，用 `let`） |
+| `function isInfluxDB() { … }` | `const isInfluxDB = () => { … }` |
+| `'HTTP ' + r.status` | `` `HTTP ${response.status}` `` |
+| 反复写 `lastQuery.url` / `lastQuery.body` | `const { url: captured, body } = lastQuery;` |
+| `String(url).indexOf(P) !== -1` | `String(url).includes(P)` |
+| `url.indexOf('http') === 0` | `url.startsWith('http')` |
+| `function (ev) { … }` | `(event) => { … }` |
+| `origFetch.apply(this, arguments)` | `function (...args)` + `origFetch.apply(this, args)` |
+| `mo` / `s` 这类单字母名 | `observer` / `tag` / `anchor` 等 |
+
+两个地方**不能**机械替换：
+
+- **`inject.js` 里三处 `function (...args)` 必须保留为普通函数，不能改成箭头函数。** 它们要把调用方的动态 `this` 原样转发给 `window.fetch` / `XMLHttpRequest.prototype.open|send` 的原始实现；箭头函数没有自己的 `this`，改了就断。
+- **`inject.js` 故意不加 `'use strict'`。** 严格模式下，页面里未绑定的 `fetch(...)` 调用会让包装函数的 `this` 变成 `undefined` 而不是 `window`，进而改变 `origFetch.apply(this, …)` 的接收者。改成剩余参数后这个语义仍然保留，所以继续留在宽松模式；`content.js` 原本就是严格模式，保持不变。
+
+改写后把扩展重新加载回 Chrome，在 `http://169.254.197.198:8086` 上完整跑了一遍：SUBMIT 能正常发出（说明 `fetch` 包装没破坏页面）、按钮注入与图标正常、导出得到 73,174 字节 / 722 行的同一份 CSV。
 
 ## 开发笔记
 

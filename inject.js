@@ -2,48 +2,55 @@
 // /api/v2/query request the InfluxDB UI just made, and hand it to the
 // content script. This mirrors what InfluxDB's own service worker does,
 // without needing a service worker (which plain-HTTP origins cannot have).
-(function () {
+//
+// Deliberately left in sloppy mode (no 'use strict'): the fetch wrapper
+// forwards its own `this` to the original fetch, and strict mode would
+// change that binding for unbound `fetch(...)` calls made by the page.
+(() => {
   if (window.__influxCsvExportHooked) return;
   window.__influxCsvExportHooked = true;
 
-  var origFetch = window.fetch;
-  window.fetch = function (input, init) {
+  const QUERY_PATH = '/api/v2/query';
+  const forward = (url, body) =>
+    window.postMessage({ __influxCsvExport: true, url: String(url), body }, '*');
+
+  const origFetch = window.fetch;
+  window.fetch = function (...args) {
+    const [input, init] = args;
     try {
-      var url = (typeof input === 'string') ? input : (input && input.url);
-      if (url && String(url).indexOf('/api/v2/query') !== -1) {
-        var body = null;
-        if (init && typeof init.body === 'string') {
-          body = init.body;
+      const url = typeof input === 'string' ? input : input && input.url;
+      if (url && String(url).includes(QUERY_PATH)) {
+        const body = init && init.body;
+        if (typeof body === 'string' && body) {
+          forward(url, body);
         } else if (typeof input !== 'string' && input && typeof input.clone === 'function') {
           // Request object: read the body asynchronously and forward it.
-          input.clone().text().then(function (t) {
-            if (t) {
-              window.postMessage({ __influxCsvExport: true, url: String(url), body: t }, '*');
-            }
-          }).catch(function () {});
-          return origFetch.apply(this, arguments);
-        }
-        if (body) {
-          window.postMessage({ __influxCsvExport: true, url: String(url), body: body }, '*');
+          input.clone().text()
+            .then((text) => { if (text) forward(url, text); })
+            .catch(() => {});
         }
       }
     } catch (e) { /* never break the page */ }
-    return origFetch.apply(this, arguments);
+    return origFetch.apply(this, args);
   };
 
   // Some InfluxDB builds issue the query through XHR instead.
-  var origOpen = XMLHttpRequest.prototype.open;
-  var origSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (m, u) {
-    this.__influxUrl = u;
-    return origOpen.apply(this, arguments);
+  const origOpen = XMLHttpRequest.prototype.open;
+  const origSend = XMLHttpRequest.prototype.send;
+
+  XMLHttpRequest.prototype.open = function (...args) {
+    const [, url] = args;
+    this.__influxUrl = url;
+    return origOpen.apply(this, args);
   };
-  XMLHttpRequest.prototype.send = function (b) {
+
+  XMLHttpRequest.prototype.send = function (...args) {
+    const [body] = args;
     try {
-      if (this.__influxUrl && String(this.__influxUrl).indexOf('/api/v2/query') !== -1 && typeof b === 'string') {
-        window.postMessage({ __influxCsvExport: true, url: String(this.__influxUrl), body: b }, '*');
+      if (this.__influxUrl && String(this.__influxUrl).includes(QUERY_PATH) && typeof body === 'string') {
+        forward(this.__influxUrl, body);
       }
     } catch (e) { /* ignore */ }
-    return origSend.apply(this, arguments);
+    return origSend.apply(this, args);
   };
 })();
