@@ -10,10 +10,11 @@
   'use strict';
 
   var BUTTON_ID = 'influx-csv-export-ext';
+  var DEFAULT_TITLE = 'Download query results as a .CSV file (added by extension)';
   var lastQuery = null;
 
-  // Never touch a page that is not InfluxDB: this script matches every
-  // http(s) URL, so bail out before injecting anything into other sites.
+  // Never touch a page that is not InfluxDB: this script is injected broadly,
+  // so bail out before doing anything on unrelated sites.
   function isInfluxDB() {
     try {
       var meta = document.querySelector('meta[name="description"]');
@@ -61,10 +62,18 @@
     }, 5000);
   }
 
+  // Only ever rewrite the label node. Assigning to btn.textContent would wipe
+  // out the icon markup that ensureButton() builds.
+  function setLabel(btn, text) {
+    var label = btn.querySelector('.cf-button--label');
+    if (label) label.textContent = text;
+    else btn.textContent = text;
+  }
+
   function exportCsv(btn) {
     if (!lastQuery) {
-      btn.textContent = 'CSV: run a query first';
-      setTimeout(function () { btn.textContent = 'CSV'; }, 2500);
+      setLabel(btn, 'CSV: run a query first');
+      setTimeout(function () { setLabel(btn, 'CSV'); }, 2500);
       return;
     }
 
@@ -73,8 +82,7 @@
       : location.origin + lastQuery.url;
 
     btn.disabled = true;
-    var old = btn.textContent;
-    btn.textContent = 'CSV \u2026';
+    setLabel(btn, 'CSV \u2026');
 
     // Same-origin request: the session cookie is sent automatically, so an
     // HttpOnly cookie is not a problem.
@@ -88,12 +96,19 @@
       return r.text();
     }).then(function (text) {
       saveBlob(text);
-      btn.textContent = 'CSV \u2713';
-      setTimeout(function () { btn.textContent = old; btn.disabled = false; }, 2000);
+      setLabel(btn, 'CSV \u2713');
+      setTimeout(function () {
+        setLabel(btn, 'CSV');
+        btn.disabled = false;
+      }, 2000);
     }).catch(function (err) {
-      btn.textContent = 'CSV failed';
+      setLabel(btn, 'CSV failed');
       btn.title = String(err);
-      setTimeout(function () { btn.textContent = old; btn.disabled = false; }, 3000);
+      setTimeout(function () {
+        setLabel(btn, 'CSV');
+        btn.title = DEFAULT_TITLE;
+        btn.disabled = false;
+      }, 3000);
     });
   }
 
@@ -110,16 +125,17 @@
       document.querySelector('[data-testid="time-machine--bottom"]');
     if (!bar) return;
 
+    const autoRefreshBtn = document.querySelector('.autorefresh-dropdown');
     var btn = document.createElement('button');
     btn.id = BUTTON_ID;
     btn.type = 'button';
-    btn.textContent = 'CSV';
-    btn.title = 'Download query results as a .CSV file (added by extension)';
+    btn.innerHTML = '<span><span data-testid="icon" class="cf-icon Download_New cf-button-icon"></span><span class="cf-button--label">CSV</span></span>';
+    btn.title = DEFAULT_TITLE;
     btn.setAttribute('data-testid', 'csv-download-button-ext');
-    btn.className = 'cf-button cf-button-md cf-button-default';
+    btn.className = 'cf-button cf-button-sm cf-button-default';
     btn.style.cssText = 'margin-left:8px;cursor:pointer;';
     btn.addEventListener('click', function () { exportCsv(btn); });
-    bar.appendChild(btn);
+    bar.insertBefore(btn, autoRefreshBtn);
   }
 
   var mo = new MutationObserver(function () { ensureButton(); });
