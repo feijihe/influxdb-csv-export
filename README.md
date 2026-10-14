@@ -93,7 +93,7 @@ class c extends PureComponent {
 2. 打开右上角的 **开发者模式**
 3. 点 **加载已解压的扩展程序**，选择**本仓库根目录**（即含 `manifest.json` 的那一层）
 
-> Chrome 137 起命令行的 `--load-extension` 已被禁用，请在 `chrome://extensions/` 内手动加载。
+> 实测（Chrome 154 / Windows）：命令行的 `--load-extension` 不会加载扩展，请用上面的 `chrome://extensions/` 手动加载。
 > 自动化场景可以走 CDP：用 `--enable-unsafe-extension-debugging` 启动 Chrome，再调用 `Extensions.loadUnpacked`（`path` 指向本仓库根目录）。
 
 ## 使用
