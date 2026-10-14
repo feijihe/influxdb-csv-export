@@ -1,0 +1,8 @@
+# Normalize line endings for a cross-platform extension repo.
+* text=auto eol=lf
+
+# Binary / data artifacts: never rewrite bytes.
+*.png binary
+*.csv -text
+*.zip binary
+*.crx binary
