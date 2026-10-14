@@ -5,7 +5,7 @@
 > Chrome extension (Manifest V3) that restores the missing Data Explorer **CSV** export button on InfluxDB instances reachable only over plain HTTP from a non-loopback origin.
 
 > [!IMPORTANT]
-> **本仓库当前是「钉死单实例」的定制版。** `manifest.json` 的 `matches` 只匹配 `http://169.254.197.198:8086/*`，换 IP 或换实例后扩展**完全不生效**（连 content script 都不会注入）。改动点与做法见 [本地定制说明](#本地定制说明)。
+> **扩展默认只对 `http://169.254.197.198:8086` 生效。** 换成别的地址后**完全不生效**（连 content script 都不会注入）。改法见 [修改适用地址](#修改适用地址)。
 
 ---
 
@@ -88,16 +88,107 @@ class c extends PureComponent {
 
 > 原生实现在服务端还依赖 `Prefer: return-download` 请求头。在 InfluxDB **2.8.0 OSS** 上实测该头**没有任何作用**：加与不加，响应头（`Content-Type: text/csv; charset=utf-8`、无 `Content-Disposition`）和字节数完全一致，CSV 本来就是 `POST /api/v2/query` 的默认返回。所以本扩展不需要它。
 
-## 安装
+## 安装（加载本地扩展）
 
-### 手动加载（推荐）
+本扩展没有上架应用商店，需要用 Chrome 的「加载已解压的扩展程序」装到本地。**仓库根目录本身就是可加载的扩展**（`manifest.json` 就在根目录），不需要先打包。
 
-1. 打开 `chrome://extensions/`
-2. 打开右上角的 **开发者模式**
-3. 点 **加载已解压的扩展程序**，选择**本仓库根目录**（即含 `manifest.json` 的那一层）
+### 步骤
 
-> 实测（Chrome 154 / Windows）：命令行的 `--load-extension` 不会加载扩展，请用上面的 `chrome://extensions/` 手动加载。
+1. 打开 Chrome，地址栏输入 `chrome://extensions/` 回车
+2. 打开右上角的 **开发者模式** 开关
+3. 点左上角的 **加载已解压的扩展程序**
+4. 在目录选择框里选中**本仓库的根目录** —— 即含 `manifest.json` 的那一层（别选到 `docs/`，也别只选到它的父目录），确定
+5. 列表里出现 **InfluxDB CSV Export (insecure-origin fix)** 就是装好了
+6. 打开（或**刷新**）目标 InfluxDB 页面 —— 扩展只对加载之后打开的页面生效，加载前就开着的标签页要刷新一次
+
+装好后可在目标页面按 F12，在 Console 里确认：
+
+```js
+document.documentElement.getAttribute('data-influx-csv-ext')   // "1"      → content script 已注入
+document.getElementById('influx-csv-export-ext')                // <button> → 按钮已创建
+```
+
+如果第 4 步报错、或者扩展没出现在列表里，通常是 `manifest.json` 有语法错误或 `matches` 写得不合法，按提示修正后重新加载。
+
+### 改完代码怎么重新加载
+
+- 改的是 `content.js` / `inject.js`：到 `chrome://extensions/` 点该扩展卡片上的 **刷新** 图标（🔄），再刷新目标页面
+- 改的是 `manifest.json`：同样点 **刷新**；`matches` 这类改动建议把目标标签页关掉重开
+- 点了刷新还是没变化：把扩展 **移除**，再重新「加载已解压的扩展程序」
+
+> 实测（Chrome 154 / Windows）：命令行的 `--load-extension` 不会加载扩展，必须走上面的界面操作。
 > 自动化场景可以走 CDP：用 `--enable-unsafe-extension-debugging` 启动 Chrome，再调用 `Extensions.loadUnpacked`（`path` 指向本仓库根目录）。
+
+## 修改适用地址
+
+扩展默认只对 `http://169.254.197.198:8086` 生效。要换成别的实例（别的 IP、别的端口，或本机 `127.0.0.1`），改 `manifest.json` 里的 `matches`，然后重新加载扩展。
+
+### 改哪两处
+
+`manifest.json` 里有**两处** `matches`，**必须一起改**：
+
+```json
+{
+  "content_scripts": [
+    {
+      "matches": ["http://169.254.197.198:8086/*"],
+      "js": ["content.js"]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["inject.js"],
+      "matches": ["http://169.254.197.198:8086/*"]
+    }
+  ]
+}
+```
+
+只改 `content_scripts.matches` 的后果：content script 照常注入、按钮也照常出现，但它加载不到 `chrome-extension://…/inject.js`，主世界嗅探器装不上 —— 表现为点按钮永远提示 `CSV: run a query first`。
+
+### 常见改法
+
+换成单个地址：
+
+```json
+"matches": ["http://192.168.1.50:8086/*"]
+```
+
+同时支持多个地址：
+
+```json
+"matches": [
+  "http://169.254.197.198:8086/*",
+  "http://127.0.0.1:8086/*",
+  "http://192.168.1.50:8086/*"
+]
+```
+
+端口不是 8086 时把端口一起改掉：
+
+```json
+"matches": ["http://192.168.1.50:9999/*"]
+```
+
+想恢复成「所有 http 站点都生效」：
+
+```json
+"matches": ["http://*/*", "https://*/*"]
+```
+
+这样写不会污染别的网站 —— `content.js` 会先判断页面是不是 InfluxDB（meta description / title），不是就直接退出；代价是 content script 会在每个 http 页面上都跑一次。
+
+如果 InfluxDB 走的是 HTTPS，把协议相应换成 `https://`。
+
+### 改完怎么让它生效
+
+1. 保存 `manifest.json`
+2. 到 `chrome://extensions/` 点该扩展卡片上的 **刷新**（🔄）
+3. 刷新目标 InfluxDB 页面
+
+> 实测 `matches` 的 host 部分带端口是被 Chrome 接受的（`http://169.254.197.198:8086/*` 能正常匹配并注入）；端口是否参与精确匹配语义未单独验证。若需要严格按端口区分，可在 `content.js` 里自行判断 `location.port`。
+>
+> `matches` 的 path 部分只支持 `/*` 这类通配，不能写正则；需要更细的 URL 条件时同样在 `content.js` 里判断。
 
 ## 使用
 
@@ -134,7 +225,7 @@ document.documentElement.getAttribute('data-influx-csv-ext')      // "1"    → 
 - **必须先点一次 SUBMIT**。扩展靠嗅探 UI 自己发出的查询请求来获知 Flux 语句；要「进页面即可导出」，需要改成从 Script Editor / Redux store 里取查询。
 - **重放的是当时的时间范围**。捕获到的 body 里 `extern` 含已解析的绝对时间，所以导出的是「当时那次查询」的结果，而不是「重新查最近 1 小时」。需要后者就得自己重建 `range()`。
 - **大结果集全量进内存**（原生是流式下载）。数据量很大时建议改用 `chrome.downloads` + 流式写入。
-- **`matches` 已钉死在单个实例**。当前只匹配 `http://169.254.197.198:8086/*`，换 IP / 换实例后扩展**完全不生效**（连 content script 都不会注入）。改法见 [本地定制说明](#本地定制说明)。`content.js` 内部仍保留 InfluxDB 特征检测（meta description / title），并在原生按钮已存在时主动让位不重复注入。
+- **只对 `matches` 里写死的地址生效**。当前是 `http://169.254.197.198:8086/*`，换 IP / 换实例后扩展**完全不生效**（连 content script 都不会注入）。改法见 [修改适用地址](#修改适用地址)。
 - **依赖 InfluxDB 的 DOM test id**（`time-machine--bottom`、`csv-download-button` 等）。已在 2.8.0 验证；其他大版本可能不同。
 - **不支持 InfluxDB Cloud / HTTPS 之外的鉴权差异**：本扩展只复用页面自身的会话；若实例要求 token 而非 cookie，需要另行处理。
 
@@ -151,13 +242,13 @@ document.documentElement.getAttribute('data-influx-csv-ext')      // "1"    → 
    chrome.exe --user-data-dir="<非默认配置目录>" \
               --unsafely-treat-insecure-origin-as-secure=http://169.254.197.198:8086
    ```
-   实测有效：`.198` 上 `isSecureContext` 变为 `true`，**原生** CSV 按钮出现。但必须同时指定非默认的 `--user-data-dir`，否则参数会被忽略；且它会全局降低该 origin 的安全级别，不建议长期使用。
+   实测有效：该 origin 上 `isSecureContext` 变为 `true`，**原生** CSV 按钮出现。但必须同时指定非默认的 `--user-data-dir`，否则参数会被忽略；且它会全局降低该 origin 的安全级别，不建议长期使用。
 
 ## 目录结构
 
 ```
 .
-├── manifest.json                  # MV3 清单；matches 已钉到 169.254.197.198:8086
+├── manifest.json                  # MV3 清单；matches 决定对哪些地址生效
 ├── content.js                     # 隔离世界：注入嗅探器、加按钮、重放查询、存盘
 ├── inject.js                      # 页面主世界：hook fetch/XHR，捕获 /api/v2/query
 ├── docs/
@@ -169,157 +260,14 @@ document.documentElement.getAttribute('data-influx-csv-ext')      // "1"    → 
 └── README.md
 ```
 
-## 本地定制说明
-
-相对通用版本，本仓库在 `manifest.json` 与 `content.js` 上各做了一处定制（即工作区中尚未提交的改动）。
-
-### 1. `manifest.json` — 把生效范围钉到单个实例
-
-```diff
-   "content_scripts": [
-     {
--      "matches": ["http://*/*", "https://*/*"],
-+      "matches": ["http://169.254.197.198:8086/*"],
-       "js": ["content.js"],
-       "run_at": "document_idle",
-       "all_frames": false
-     }
-   ],
-   "web_accessible_resources": [
-     {
-       "resources": ["inject.js"],
--      "matches": ["http://*/*", "https://*/*"]
-+      "matches": ["http://169.254.197.198:8086/*"]
-     }
-   ]
-```
-
-**两处必须一起改。** 只改 `content_scripts.matches` 的话：content script 能注入，但它去加载 `chrome-extension://…/inject.js` 时会被 `web_accessible_resources.matches` 挡掉，主世界嗅探器装不上 —— 表现是按钮能出现，但点下去永远提示 `CSV: run a query first`。
-
-换到别的实例，把地址替换成目标即可：
-
-```json
-"matches": ["http://192.168.1.50:8086/*"]
-```
-
-要同时支持多个地址就写成数组：
-
-```json
-"matches": ["http://169.254.197.198:8086/*", "http://127.0.0.1:8086/*"]
-```
-
-改完在 `chrome://extensions/` 里点该扩展的「刷新」按钮（或重新「加载已解压的扩展程序」）。
-
-> 已实测：Chrome 154 接受带端口的 match pattern，`http://169.254.197.198:8086/*` 在该地址上能正常匹配并注入（`html[data-influx-csv-ext]="1"`，按钮出现）。端口在 match pattern 中的精确匹配语义（是否等价于「该主机的任意端口」）未单独验证。
-
-### 2. `content.js` — 按钮外观与位置对齐原生
-
-当前代码（已转为 ES6）：
-
-```js
-const autoRefreshBtn = document.querySelector('.autorefresh-dropdown');
-const btn = document.createElement('button');
-btn.id = BUTTON_ID;
-btn.type = 'button';
-btn.innerHTML =
-  '<span><span data-testid="icon" class="cf-icon Download_New cf-button-icon"></span>' +
-  `<span class="cf-button--label">${LABEL}</span></span>`;
-btn.title = DEFAULT_TITLE;
-btn.setAttribute('data-testid', 'csv-download-button-ext');
-btn.className = 'cf-button cf-button-sm cf-button-default';
-btn.style.cssText = 'margin-left:8px;cursor:pointer;';
-btn.addEventListener('click', () => exportCsv(btn));
-bar.insertBefore(btn, autoRefreshBtn);
-```
-
-相对通用版本的改动：
-
-- 用 `cf-icon Download_New` + `cf-button--label` 复刻原生按钮的「图标 + 文字」结构，尺寸由 `md` 改为 `sm`
-- 插入点由工具栏末尾（`appendChild`）改为 `.autorefresh-dropdown` **之前**，即落在 `View Raw Data` 右侧、刷新控件左侧 —— 与原生 CSV 按钮同位置
-- 查不到 `.autorefresh-dropdown` 时 `insertBefore(btn, null)` 等价于 `appendChild`，会退回追加到末尾，不会抛错
-- 标题字面量提成 `DEFAULT_TITLE` 常量，供后面状态恢复时复用
-
-在 `http://169.254.197.198:8086` 上实测：
-
-```
-extClass : "cf-button cf-button-sm cf-button-default"
-extHtml  : "<span><span data-testid=\"icon\" class=\"cf-icon Download_New cf-button-icon\"></span><span class=\"cf-button--label\">CSV</span></span>"
-barOrder : [div, influx-csv-export-ext, div, div, switch-to-script-editor, time-machine-submit-button]
-```
-
-`barOrder` 里 `influx-csv-export-ext` 排第 2 位，正好夹在 `View Raw Data` 与自动刷新控件之间，符合预期。
-
-### 3. `content.js` — 状态更新只改 label（修复图标丢失）
-
-把上面「外观改版」和原有的状态反馈接上以后暴露出一个缺陷：`exportCsv()` 原本用 `btn.textContent = 'CSV …'` / `'CSV ✓'` / `'CSV failed'` 反馈状态，而给 `textContent` 赋值会**清空 `innerHTML`**，把那段图标标记一起抹掉。修复前实测：
-
-```
-点击前 extHtml: "<span><span ... class=\"cf-icon Download_New ...\"></span><span class=\"cf-button--label\">CSV</span></span>"
-点击后 extHtml: "CSV"        ← 图标永久丢失
-```
-
-而且恢复用的 `var old = btn.textContent` 记下的也只是 `"CSV"`，所以退化成纯文字后再也回不来。
-
-修法是让状态更新只动 label 节点，并抽出一个统一的复位函数：
-
-```js
-// Only ever rewrite the label node. Assigning to btn.textContent would wipe
-// out the icon markup that ensureButton() builds.
-const setLabel = (btn, text) => {
-  const label = btn.querySelector('.cf-button--label');
-  if (label) label.textContent = text;
-  else btn.textContent = text;
-};
-
-const resetButton = (btn, delay) => {
-  setTimeout(() => {
-    setLabel(btn, LABEL);
-    btn.title = DEFAULT_TITLE;
-    btn.disabled = false;
-  }, delay);
-};
-```
-
-`exportCsv()` 里所有 `btn.textContent = …` 都改成 `setLabel(…)`，成功与失败分别调用 `resetButton(btn, 2000)` / `resetButton(btn, 3000)`。顺带把失败时被改写的 `btn.title` 也还原回 `DEFAULT_TITLE`，否则错误信息会一直挂在按钮上。
-
-修复后在 `http://169.254.197.198:8086` 上实测（点击前 → 点击后 → 状态定时器走完）：
-
-```
-iconPresent : true → true → true
-labelText   : "CSV" → "CSV" → "CSV"      （中间短暂显示 "CSV …" / "CSV ✓"）
-extHtml     : 点击前后完全一致，图标标记没丢
-导出结果     : Downloads\query.csv，73,174 字节 / 722 行
-```
-
-### 4. `content.js` / `inject.js` — 全文件改为 ES6 语法
-
-两个文件都已从 ES5 风格改写为 ES6（ES2015），行为不变：
-
-| 原写法 | 现写法 |
-| --- | --- |
-| `(function () { … })()` | `(() => { … })()` |
-| `var x = …` | `const x = …`（`lastQuery` 需要重新赋值，用 `let`） |
-| `function isInfluxDB() { … }` | `const isInfluxDB = () => { … }` |
-| `'HTTP ' + r.status` | `` `HTTP ${response.status}` `` |
-| 反复写 `lastQuery.url` / `lastQuery.body` | `const { url: captured, body } = lastQuery;` |
-| `String(url).indexOf(P) !== -1` | `String(url).includes(P)` |
-| `url.indexOf('http') === 0` | `url.startsWith('http')` |
-| `function (ev) { … }` | `(event) => { … }` |
-| `origFetch.apply(this, arguments)` | `function (...args)` + `origFetch.apply(this, args)` |
-| `mo` / `s` 这类单字母名 | `observer` / `tag` / `anchor` 等 |
-
-两个地方**不能**机械替换：
-
-- **`inject.js` 里三处 `function (...args)` 必须保留为普通函数，不能改成箭头函数。** 它们要把调用方的动态 `this` 原样转发给 `window.fetch` / `XMLHttpRequest.prototype.open|send` 的原始实现；箭头函数没有自己的 `this`，改了就断。
-- **`inject.js` 故意不加 `'use strict'`。** 严格模式下，页面里未绑定的 `fetch(...)` 调用会让包装函数的 `this` 变成 `undefined` 而不是 `window`，进而改变 `origFetch.apply(this, …)` 的接收者。改成剩余参数后这个语义仍然保留，所以继续留在宽松模式；`content.js` 原本就是严格模式，保持不变。
-
-改写后把扩展重新加载回 Chrome，在 `http://169.254.197.198:8086` 上完整跑了一遍：SUBMIT 能正常发出（说明 `fetch` 包装没破坏页面）、按钮注入与图标正常、导出得到 73,174 字节 / 722 行的同一份 CSV。
-
 ## 开发笔记
 
 - 扩展**没有** background service worker，也没有任何网络权限声明：所有请求都从页面自身 origin 发出，靠 `credentials: 'include'` 复用页面会话。
 - 调试时关注两处 DOM 标记：`html[data-influx-csv-ext="1"]`（content script 已注入）与 `#influx-csv-export-ext`（按钮已创建）。`inject.js` 通过 `<script src="chrome-extension://…">` 注入主世界；InfluxDB 页面未设置 CSP，因此不会被拦（若目标实例设置了 CSP，可改用 `chrome.scripting.executeScript({ world: 'MAIN' })`）。
 - 主世界脚本用 `window.__influxCsvExportHooked` 做幂等保护，重复注入不会叠加 hook。
+- 源码是 ES6（ES2015）。`inject.js` 里三处包装函数（`window.fetch`、`XMLHttpRequest.prototype.open|send`）**必须保持普通函数，不能改成箭头函数** —— 它们要把调用方的动态 `this` 原样转发给原始实现，而箭头函数没有自己的 `this`。
+- `inject.js` 故意**不加** `'use strict'`：严格模式下，页面里未绑定的 `fetch(...)` 会让包装函数的 `this` 变成 `undefined` 而不是 `window`，从而改变转发给原始 `fetch` 的接收者。`content.js` 则一直是严格模式。
+- 按钮的状态更新只改 `.cf-button--label` 节点的文字（`setLabel()`），**不要**直接给 `btn.textContent` 赋值 —— 那会清空 `innerHTML`，把图标一起抹掉。
 
 ## 测试环境
 
