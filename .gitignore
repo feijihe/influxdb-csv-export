@@ -1,0 +1,15 @@
+# OS / editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+.idea/
+.vscode/
+
+# Local scratch / build output
+node_modules/
+dist/
+*.zip
+*.crx
+*.pem
